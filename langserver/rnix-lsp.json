@@ -1,0 +1,11 @@
+{
+    "name": "rnix-lsp",
+    "languageId": "nix",
+    "command": ["rnix-lsp"],
+    "settings": {}
+    "initializationOptions": {
+	"languageFeatures": {
+	    "signatureHelp": false
+	}
+    }
+}
