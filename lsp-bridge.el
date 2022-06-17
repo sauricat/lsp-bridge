@@ -310,6 +310,7 @@ Then LSP-Bridge will start by gdb, please send new issue with `*lsp-bridge*' buf
     ((css-mode) . "vscode-css-language-server")
     (elm-mode . "elm-language-server")
     (php-mode . "intelephense")
+    (nix-mode . "rnix-lsp")
     (yaml-mode . "yaml-language-server")
     (zig-mode . "zls")
     )
@@ -358,7 +359,8 @@ Then LSP-Bridge will start by gdb, please send new issue with `*lsp-bridge*' buf
     php-mode-hook
     yaml-mode-hook
     zig-mode-hook
-    groovy-mode-hook)
+    groovy-mode-hook
+    nix-mode-hook)
   "The default mode hook to enable lsp-bridge."
   :type 'list)
 
