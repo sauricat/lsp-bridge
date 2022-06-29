@@ -72,7 +72,7 @@
 
 ;;; Acknowledgements:
 ;;
-;;
+;;      * Daniel Mendler: reference some code from corfu, thanks
 ;;
 
 ;;; TODO
@@ -103,12 +103,6 @@
 (defcustom acm-menu-length 10
   "Maximal number of candidates to show."
   :type 'integer)
-
-(defcustom acm-fetch-candidate-doc-delay 0.5
-  "How many seconds to stay in your fingers will popup the candidate documentation.
-
-Default is 0.5 second."
-  :type 'float)
 
 (defcustom acm-continue-commands
   ;; nil is undefined command
@@ -183,8 +177,6 @@ Default is 0.5 second."
 
 (defvar acm-doc-frame nil)
 (defvar acm-doc-buffer " *acm-doc-buffer*")
-(defvar acm-fetch-doc-timer nil)
-
 (defvar acm--mouse-ignore-map
   (let ((map (make-sparse-keymap)))
     (dotimes (i 7)
@@ -485,13 +477,6 @@ influence of C1 on the result."
         ;; Use `pre-command-hook' to hide completion menu when command match `acm-continue-commands'.
         (add-hook 'pre-command-hook #'acm--pre-command nil 'local)
 
-        ;; Hide doc frame first.
-        (acm-doc-hide)
-
-        ;; Start fetch documentation timer.
-        (when acm-enable-doc
-          (acm-run-idle-func acm-fetch-doc-timer acm-fetch-candidate-doc-delay 'acm-fetch-candidate-doc))
-
         ;; Init candidates, menu index and offset.
         (setq-local acm-candidates candidates)
         (setq-local acm-menu-candidates
@@ -541,7 +526,11 @@ influence of C1 on the result."
 
 (defun acm-frame-get-popup-position ()
   (let* ((edges (window-pixel-edges))
-         (window-left (nth 0 edges))
+         (window-left (+ (nth 0 edges)
+                         ;; We need adjust left margin for buffer centering module.
+                         (/ (- (window-pixel-width)
+                               (window-body-width nil t))
+                            2)))
          (window-top (nth 1 edges))
          (pos (posn-x-y (posn-at-point acm-frame-popup-point)))
          (x (car pos))
@@ -571,13 +560,7 @@ influence of C1 on the result."
   (setq acm-menu-max-length-cache 0)
 
   ;; Remove hook of `acm--pre-command'.
-  (remove-hook 'pre-command-hook #'acm--pre-command 'local)
-
-  ;; Cancel timers.
-  (acm-cancel-timer acm-fetch-doc-timer)
-
-  ;; Clean LSP backend completion tick.
-  (setq-local acm-backend-lsp-completion-item-popup-doc-tick nil))
+  (remove-hook 'pre-command-hook #'acm--pre-command 'local))
 
 (defun acm-cancel-timer (timer)
   `(when ,timer
@@ -605,6 +588,7 @@ influence of C1 on the result."
         ("path" (acm-backend-path-candidate-expand candidate-info bound-start))
         ("search-words" (acm-backend-search-words-candidate-expand candidate-info bound-start))
         ("tempel" (acm-backend-tempel-candidate-expand candidate-info bound-start))
+        ("english" (acm-backend-english-candidate-expand candidate-info bound-start))
         (_
          (delete-region bound-start (point))
          (insert (plist-get candidate-info :label)))
@@ -632,19 +616,16 @@ influence of C1 on the result."
           (insert (substring common-string (length (acm-get-input-prefix))))
         (message "No common string found")))))
 
-(defun acm-toggle-english-helper ()
-  "Toggle english helper."
-  (interactive)
-  (if acm-enable-english-helper
-      (message "Turn off english helper.")
-    (message "Turn on english helper."))
-  (setq-local acm-enable-english-helper (not acm-enable-english-helper)))
+(defvar acm-string-width-function (if (fboundp 'string-pixel-width)
+                                      'string-pixel-width
+                                    'string-width))
 
 (defun acm-menu-max-length ()
   "Get max length of menu candidates, use for adjust menu size dynamically."
   (cl-reduce #'max
              (mapcar (lambda (v)
-                       (string-width (format "%s %s" (plist-get v :display-label) (plist-get v :annotation))))
+                       (funcall acm-string-width-function
+                                (format "%s %s" (plist-get v :display-label) (plist-get v :annotation))))
                      acm-menu-candidates)))
 
 (defun acm-menu-render-items (items menu-index)
@@ -654,7 +635,7 @@ influence of C1 on the result."
              (candidate (plist-get v :display-label))
              (annotation (plist-get v :annotation))
              (annotation-text (if annotation annotation ""))
-             (item-length (string-width annotation-text))
+             (item-length (funcall acm-string-width-function annotation-text))
              (icon-text (if icon (acm-icon-build (nth 0 icon) (nth 1 icon) (nth 2 icon)) ""))
              candidate-line)
 
@@ -671,7 +652,9 @@ influence of C1 on the result."
                (propertize " "
                            'display
                            (acm-indent-pixel
-                            (ceiling (* (window-font-width) (- (+ acm-menu-max-length-cache 20) item-length)))))
+                            (if (equal acm-string-width-function 'string-pixel-width)
+                                (- (+ acm-menu-max-length-cache (* 20 (string-pixel-width " "))) item-length)
+                              (ceiling (* (window-font-width) (- (+ acm-menu-max-length-cache 20) item-length))))))
                (propertize (format "%s \n" (capitalize annotation-text))
                            'face
                            (if (equal item-index menu-index) 'acm-select-face 'font-lock-doc-face))))
@@ -715,31 +698,32 @@ influence of C1 on the result."
     (acm-set-frame-position acm-frame acm-frame-x acm-frame-y)))
 
 (defun acm-doc-show ()
-  (let* ((candidate (acm-menu-current-candidate))
-         (backend (plist-get candidate :backend))
-         (candidate-doc
-          (pcase backend
-            ("lsp" (acm-backend-lsp-candidate-doc candidate))
-            ("elisp" (acm-backend-elisp-candidate-doc candidate))
-            ("yas" (acm-backend-yas-candidate-doc candidate))
-            ("tempel" (acm-backend-tempel-candidate-doc candidate))
-            (_ ""))))
-    (when (and candidate-doc
-               (not (string-equal candidate-doc "")))
-      ;; Create doc frame if it not exist.
-      (acm-create-frame-if-not-exist acm-doc-frame acm-doc-buffer "acm doc frame" 10)
+  (when acm-enable-doc
+    (let* ((candidate (acm-menu-current-candidate))
+           (backend (plist-get candidate :backend))
+           (candidate-doc
+            (pcase backend
+              ("lsp" (acm-backend-lsp-candidate-doc candidate))
+              ("elisp" (acm-backend-elisp-candidate-doc candidate))
+              ("yas" (acm-backend-yas-candidate-doc candidate))
+              ("tempel" (acm-backend-tempel-candidate-doc candidate))
+              (_ ""))))
+      (when (and candidate-doc
+                 (not (string-equal candidate-doc "")))
+        ;; Create doc frame if it not exist.
+        (acm-create-frame-if-not-exist acm-doc-frame acm-doc-buffer "acm doc frame" 10)
 
-      ;; Insert documentation and turn on wrap line.
-      (with-current-buffer (get-buffer-create acm-doc-buffer)
-        (erase-buffer)
-        (insert candidate-doc)
-        (visual-line-mode 1))
+        ;; Insert documentation and turn on wrap line.
+        (with-current-buffer (get-buffer-create acm-doc-buffer)
+          (erase-buffer)
+          (insert candidate-doc)
+          (visual-line-mode 1))
 
-      ;; Adjust doc frame position and size.
-      (acm-doc-fame-adjust)
-      )))
+        ;; Adjust doc frame position and size.
+        (acm-doc-frame-adjust)
+        ))))
 
-(defun acm-doc-fame-adjust ()
+(defun acm-doc-frame-adjust ()
   (let* ((emacs-width (frame-pixel-width))
          (emacs-height (frame-pixel-height))
          (acm-frame-width (frame-pixel-width acm-frame))
@@ -798,10 +782,14 @@ influence of C1 on the result."
 
       ;; Adjust doc frame with menu frame position.
       (when (acm-frame-visible-p acm-doc-frame)
-        (acm-doc-fame-adjust)))
+        (acm-doc-frame-adjust)))
 
     ;; Adjust menu frame position.
-    (acm-menu-adjust-pos)))
+    (acm-menu-adjust-pos)
+
+    ;; Fetch `documentation' and `additionalTextEdits' information.
+    (acm-fetch-candidate-doc)
+    ))
 
 (cl-defmacro acm-silent (&rest body)
   "Silence BODY."

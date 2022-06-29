@@ -22,15 +22,14 @@ Lsp-bridge uses python's threading technology to build caches that bridge Emacs 
 (add-to-list 'load-path "<path-to-lsp-bridge>")
 
 (require 'yasnippet)
-(require 'lsp-bridge)
-(require 'lsp-bridge-jdtls)       ;; provide Java third-party library jump and -data directory support, optional
-
 (yas-global-mode 1)
+
+(require 'lsp-bridge)
 (global-lsp-bridge-mode)
 ```
 
 ## Usage
-lsp-bridge is design for out the box. After installing the LSP server command corresponding to the open file, you can write the code directly without additional settings.
+lsp-bridge is design for out the box. After **installing the LSP server command** corresponding to the open file, you can write the code directly without additional settings.
 
 There are two modes in lsp-bridge:
 1. When detecting the .git directory (to judge by command `git rev-parse-is-inside-work-tree`), lsp-bridge scan the entire directory files to provide completion
@@ -78,7 +77,6 @@ If you expect lsp-bridge to automatically scan the files of the entire project, 
 * `acm-candidate-match-function`: The complete menu matching algorithm, the algorithm prefix of orderless-* needs to be installed additional [orderless](https://github.com/oantolin/orderless)
 * `acm-enable-doc`: Whether the complete menu display the help document
 * `acm-enable-icon`: Whether the complete menu shows the icon
-* `acm-fetch-candidate-doc-delay`: The complete menu pops up the delay of the document. It is not recommended to set it to 0, which will reduce the menu selection performance
 * `acm-snippet-insert-index`: The display position of snippet candidate in the complementary menu
 
 ## Customize language server configuration
@@ -126,6 +124,8 @@ Welcome to send PR to help us improve support for LSP servers, thanks for your c
 | 22 | [elm-language-server](https://github.com/elm-tooling/elm-language-server) | elm | |
 | 23 | [intelephense](https://github.com/bmewburn/vscode-intelephense) | php | |
 | 24 | [yaml-language-server](https://github.com/redhat-developer/yaml-language-server) | yaml | `npm install -g yaml-language-server` |
+| 25 | [zls](https://github.com/zigtools/zls) | zig | execute `zls config` to generate configuration for zls. see [Configuration Options](https://github.com/zigtools/zls#configuration-options) |
+| 26 | [groovy-language-server](https://github.com/GroovyLanguageServer/groovy-language-server) | groovy | Create a script "groovy-language-server" in PATH, with `$JAVA_HOME/bin/java -jar <path>/groovy-language-server-all.jar` |
 
 ### TODO:
 
@@ -138,7 +138,7 @@ The goal of lsp-bridge is to become the fastest LSP client in Emacs, not a compl
 Emacs can do better for the following tasks, we will not reinvent the wheel in lsp-bridge:
 1. Code formatting: each LSP server has its own formatting specification, we can gain finer control using Emacs' builtin formatting tool.
 2. Syntax highlighting: [Tree-sitter](https://tree-sitter.github.io/tree-sitter/) is a wonderful incremental parsing library for syntax highlighting.
-2. Xref: Xref's mechanism is simultaneously. lsp-bridge is completely asynchronous, recommended to use wrap function to uniformly key
+2. Xref: Xref's mechanism is synchronous, but lsp-bridge is completely asynchronous. I recommended binding your xref key to a wrapper function that combines xref and lsp-bridge together.
 
 ## Join development
 
@@ -168,6 +168,17 @@ The following is the directory structure of the lsp-bridge project:
 Please read [LSP Specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/) and [The Design of lsp-bridge](https://manateelazycat.github.io/emacs/2022/05/12/lsp-bridge.html) first.
 
 Then turn on option ```lsp-bridge-enable-log``` and happy hacking! ;)
+
+## FAQ
+
+> Why lsp-bridge can't complete the code of other files in the project directory?
+
+lsp-bridge relies on `git` to find the project path. lsp-bridge will enter a `single file mode` if it cannot find git information. You need to find the project path and execute `git init` command to solve this problem.
+
+> When you open the *.json file, why is it always prompting `[LSP-BRIDGE] error: cann’t find command for *.json, disable lsp-bride-mode.` ?
+
+Because Emacs defaults to set the mode of json file to js-mode, you need to install [json-mode](https://github.com/joshwnj/json-mode) to solve this problem.
+
 
 ## Report bug
 

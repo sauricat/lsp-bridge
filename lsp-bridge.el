@@ -76,8 +76,11 @@
 (require 'map)
 (require 'seq)
 (require 'subr-x)
+
 (require 'lsp-bridge-epc)
 (require 'lsp-bridge-ref)
+(require 'lsp-bridge-jdtls)
+
 (require 'posframe)
 (require 'markdown-mode)
 
@@ -102,7 +105,6 @@
       (setq lsp-bridge-completion-item-fetch-tick (list acm-backend-lsp-filepath label kind)))))
 
 (defalias 'lsp-bridge-insert-common-prefix #'acm-insert-common)
-(defalias 'lsp-bridge-toggle-english-helper #'acm-toggle-english-helper)
 
 (defcustom lsp-bridge-completion-popup-predicates '(lsp-bridge-not-only-blank-before-cursor
                                                     lsp-bridge-not-match-hide-characters
@@ -292,6 +294,7 @@ Then LSP-Bridge will start by gdb, please send new issue with `*lsp-bridge*' buf
     ((rust-mode rustic-mode) . "rust-analyzer")
     (elixir-mode . "elixirLS")
     (go-mode . "gopls")
+    (groovy-mode . "groovy-language-server")
     (haskell-mode . "hls")
     (lua-mode . "sumneko")
     (dart-mode . "dart-analysis-server")
@@ -309,6 +312,7 @@ Then LSP-Bridge will start by gdb, please send new issue with `*lsp-bridge*' buf
     (php-mode . "intelephense")
     (nix-mode . "rnix-lsp")
     (yaml-mode . "yaml-language-server")
+    (zig-mode . "zls")
     )
   "The lang server rule for file mode."
   :type 'cons)
@@ -353,8 +357,10 @@ Then LSP-Bridge will start by gdb, please send new issue with `*lsp-bridge*' buf
     lisp-interaction-mode-hook
     org-mode-hook
     php-mode-hook
-    nix-mode-hook
-    yaml-mode-hook)
+    yaml-mode-hook
+    zig-mode-hook
+    groovy-mode-hook
+    nix-mode-hook)
   "The default mode hook to enable lsp-bridge."
   :type 'list)
 
@@ -606,10 +612,8 @@ Auto completion is only performed if the tick did not change."
     (lsp-bridge-try-completion)
     ))
 
-(defvar-local lsp-bridge-search-words-candidates nil)
-
 (defun lsp-bridge-record-search-words-items (candidates)
-  (setq-local lsp-bridge-search-words-candidates candidates)
+  (setq-local acm-backend-search-words-items candidates)
   (lsp-bridge-try-completion))
 
 (defun lsp-bridge-try-completion ()
@@ -637,7 +641,14 @@ Auto completion is only performed if the tick did not change."
 
 (defun lsp-bridge-not-in-string ()
   "Hide completion if cursor in string area."
-  (not (lsp-bridge-in-string-p)))
+  (or
+   ;; Allow english completion in string area
+   acm-enable-english-helper
+   ;; Allow volar popup completion menu in string.
+   (and acm-backend-lsp-filepath
+        (string-suffix-p ".vue" acm-backend-lsp-filepath))
+   ;; Other language not allowed popup completion in string, it's annoy
+   (not (lsp-bridge-in-string-p))))
 
 (defun lsp-bridge-not-follow-complete ()
   "Hide completion if last command is `acm-complete'."
@@ -834,17 +845,17 @@ Auto completion is only performed if the tick did not change."
 
 (defun lsp-bridge-rename-file (filepath edits)
   (find-file-noselect filepath)
-  (lsp-bridge--with-file-buffer filepath
-    (save-excursion
-      (dolist (edit (reverse edits))
-        (let* ((bound-start (nth 0 edit))
-               (bound-end (nth 1 edit))
-               (new-text (nth 2 edit))
-               (replace-start-pos (acm-backend-lsp-position-to-point bound-start))
-               (replace-end-pos (acm-backend-lsp-position-to-point bound-end)))
-          (delete-region replace-start-pos replace-end-pos)
-          (goto-char replace-start-pos)
-          (insert new-text)))))
+  (save-excursion
+    (find-file filepath)
+    (dolist (edit (reverse edits))
+      (let* ((bound-start (nth 0 edit))
+             (bound-end (nth 1 edit))
+             (new-text (nth 2 edit))
+             (replace-start-pos (acm-backend-lsp-position-to-point bound-start))
+             (replace-end-pos (acm-backend-lsp-position-to-point bound-end)))
+        (delete-region replace-start-pos replace-end-pos)
+        (goto-char replace-start-pos)
+        (insert new-text))))
   (setq lsp-bridge-prohibit-completion t))
 
 (defun lsp-bridge--jump-to-def (filepath position)
@@ -946,8 +957,9 @@ Auto completion is only performed if the tick did not change."
                          (if (equal index (1- (length help-infos))) "" ", ")))
       (setq index (1+ index)))
 
-    (let ((message-log-max nil))
-      (funcall lsp-bridge-signature-function help))))
+    (unless (string-equal help "")
+      (let ((message-log-max nil))
+        (funcall lsp-bridge-signature-function help)))))
 
 (defvar lsp-bridge--last-buffer nil)
 
@@ -1192,32 +1204,63 @@ Auto completion is only performed if the tick did not change."
   (when (lsp-bridge-has-lsp-server-p)
     (lsp-bridge-call-file-api "ignore_diagnostic")))
 
-(defun lsp-bridge-code-action ()
+(defun lsp-bridge-code-action (&optional action-kind)
   (interactive)
   (when (lsp-bridge-has-lsp-server-p)
-    (lsp-bridge-call-file-api "code_fix")))
+    (lsp-bridge-call-file-api "code_fix" (lsp-bridge-get-range-start) (lsp-bridge-get-range-end) action-kind)
+
+    (setq-local lsp-bridge-code-action-notify t)))
 
 (defvar-local lsp-bridge-code-action-notify nil)
 
-(defun lsp-bridge-code-action-quickfix (title changes)
-  (dolist (change changes)
-    (let* ((filepath (nth 0 change))
-           (change-infos (nth 1 change)))
-      (lsp-bridge--with-file-buffer filepath
-        ;; reverse `change-infos` make sure the previous modification will not affect the subsequent modification.
-        (dolist (change-info (reverse change-infos))
-          (let* ((range (plist-get change-info :range))
-                 (start (acm-backend-lsp-position-to-point (plist-get range :start)))
-                 (end (acm-backend-lsp-position-to-point (plist-get range :end)))
-                 (new-text (plist-get change-info :newText)))
-            (goto-char start)
-            (delete-region start end)
-            (insert new-text)
-            )))))
+(defvar lsp-bridge-english-helper-dict nil)
+
+(defun lsp-bridge-code-action-fix (actions action-kind)
+  (let* ((menu-items
+          (or
+           (mapcar #'(lambda (action)
+                       (when (or (not action-kind)
+                                 (equal action-kind (plist-get action :kind)))
+                         (cons (plist-get action :title) action)))
+                   actions)
+           (apply #'error
+                  (if action-kind
+                      (format "No '%s' code action here" action-kind)
+                    "No code actions here"))))
+         (preferred-action (cl-find-if
+                            (lambda (menu-item)
+                              (plist-get (cdr menu-item) :isPreferred))
+                            menu-items))
+         (default-action (car (or preferred-action (car menu-items))))
+         (action (if (and action-kind (null (cadr menu-items)))
+                     (cdr (car menu-items))
+                   (cdr (assoc (completing-read
+                                (format "[LSP-BRIDGE] Pick an action (default: %s): " default-action)
+                                menu-items nil t nil nil default-action)
+                               menu-items)))))
+
+    (pcase (plist-get action :kind)
+      ("quickfix" (lsp-bridge-code-action-quickfix (plist-get action :title) (plist-get (plist-get action :edit) :changes)))
+      (_ (message "[LSP-BRIDGE] code action '%s' not implement yet." (plist-get action :kind))))
+    ))
+
+(defun lsp-bridge-code-action-quickfix (title change)
+  (let* ((filepath (string-remove-prefix ":file://" (format "%s" (nth 0 change))))
+         (change-infos (nth 1 change)))
+    (lsp-bridge--with-file-buffer filepath
+      ;; reverse `change-infos` make sure the previous modification will not affect the subsequent modification.
+      (dolist (change-info (reverse change-infos))
+        (let* ((range (plist-get change-info :range))
+               (start (acm-backend-lsp-position-to-point (plist-get range :start)))
+               (end (acm-backend-lsp-position-to-point (plist-get range :end)))
+               (new-text (plist-get change-info :newText)))
+          (goto-char start)
+          (delete-region start end)
+          (insert new-text)
+          ))))
 
   (unless (string-equal title "")
-    (message "[LSP-BRIDGE] Quickfix: '%s'" title)
-    (setq-local lsp-bridge-code-action-notify t)))
+    (message "[LSP-BRIDGE] Quickfix: '%s'" title)))
 
 (defun lsp-bridge-get-range-start ()
   (lsp-bridge--point-position
@@ -1230,29 +1273,6 @@ Auto completion is only performed if the tick did not change."
    (if (region-active-p)
        (region-end)
      (cdr (bounds-of-thing-at-point 'sexp)))))
-
-(defun lsp-bridge-input-message (filepath interactive-string callback-tag interactive-type initial-content completion-list)
-  "Handles input message INTERACTIVE-STRING on the Python side given FILEPATH and CALLBACK-TYPE."
-  (let* ((input-message (lsp-bridge-read-input (concat "[LSP-BRIDGE] " interactive-string) interactive-type initial-content completion-list)))
-    (if input-message
-        (lsp-bridge-call-async "handle_input_response" filepath (lsp-bridge-get-range-start) (lsp-bridge-get-range-end) callback-tag input-message)
-      (lsp-bridge-call-async "cancel_input_response" filepath callback-tag))))
-
-(defun lsp-bridge-read-input (interactive-string interactive-type initial-content completion-list)
-  "lsp-bridge's multi-purpose read-input function which read an INTERACTIVE-STRING with INITIAL-CONTENT, determines the function base on INTERACTIVE-TYPE."
-  (condition-case nil
-      (cond ((or (string-equal interactive-type "string")
-                 (string-equal interactive-type "marker"))
-             (read-string interactive-string initial-content))
-            ((string-equal interactive-type "file")
-             (expand-file-name (read-file-name interactive-string initial-content)))
-            ((string-equal interactive-type "directory")
-             (expand-file-name (read-directory-name interactive-string initial-content)))
-            ((string-equal interactive-type "yes-or-no")
-             (yes-or-no-p interactive-string))
-            ((string-equal interactive-type "list")
-             (completing-read interactive-string completion-list)))
-    (quit nil)))
 
 (defun lsp-bridge-insert-ignore-diagnostic-comment (comment-string)
   (move-end-of-line 1)
@@ -1306,8 +1326,7 @@ Auto completion is only performed if the tick did not change."
         (puthash key item acm-backend-lsp-items))
 
       ;; Popup documentation window if same documentation window not exist.
-      (unless (string-equal key acm-backend-lsp-completion-item-popup-doc-tick)
-        (acm-doc-show))
+      (acm-doc-show)
       )))
 
 (defun lsp-bridge-render-markdown-content ()
@@ -1317,6 +1336,28 @@ Auto completion is only performed if the tick did not change."
       (gfm-mode)))
   (read-only-mode 0)
   (font-lock-ensure))
+
+(defun lsp-bridge-toggle-english-helper ()
+  "Toggle english helper."
+  (interactive)
+  (unless lsp-bridge-english-helper-dict
+    (setq lsp-bridge-english-helper-dict (make-hash-table :test 'equal)))
+
+  (if acm-enable-english-helper
+      (progn
+        ;; Disable `lsp-bridge-mode' if it is enable temporality.
+        (when (gethash (buffer-name) lsp-bridge-english-helper-dict)
+          (lsp-bridge-mode -1)
+          (remhash (buffer-name) lsp-bridge-english-helper-dict))
+
+        (message "Turn off english helper."))
+    ;; We enable `lsp-bridge-mode' temporality if current-mode not enable `lsp-bridge-mode' yet.
+    (unless lsp-bridge-mode
+      (puthash (buffer-name) t lsp-bridge-english-helper-dict)
+      (lsp-bridge-mode 1))
+
+    (message "Turn on english helper."))
+  (setq-local acm-enable-english-helper (not acm-enable-english-helper)))
 
 ;;;###autoload
 (defun global-lsp-bridge-mode ()
@@ -1353,17 +1394,15 @@ Auto completion is only performed if the tick did not change."
 ;; https://tecosaur.github.io/emacs-config/config.html#lsp-support-src
 (cl-defmacro lsp-org-babel-enable (lang)
   "Support LANG in org source code block."
-  (cl-check-type lang stringp)
+  (cl-check-type lang string)
   (let* ((edit-pre (intern (format "org-babel-edit-prep:%s" lang)))
          (intern-pre (intern (format "lsp--%s" (symbol-name edit-pre)))))
     `(progn
        (defun ,intern-pre (info)
          (let ((file-name (->> info caddr (alist-get :file))))
            (unless file-name
-             (setq file-name (make-temp-file (let ((lsp-babel-dir (concat default-directory ".lsp/babel/")))
-                                               (if (not (file-directory-p lsp-babel-dir))
-                                                   (make-directory lsp-babel-dir t))
-                                               (concat lsp-babel-dir "babel-lsp-")))))
+             (setq file-name (concat default-directory ".org-src-babel"))
+             (write-region (point-min) (point-max) file-name))
            (setq buffer-file-name file-name)
            (lsp-bridge-mode 1)))
        (put ',intern-pre 'function-documentation

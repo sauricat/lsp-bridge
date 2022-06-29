@@ -22,17 +22,16 @@ lsp-bridge使用Python多线程技术在Emacs和LSP服务器之间构建高速�
 (add-to-list 'load-path "<path-to-lsp-bridge>")
 
 (require 'yasnippet)
-(require 'lsp-bridge)
-(require 'lsp-bridge-jdtls)       ;; 提供Java第三方库跳转和-data目录支持， Java用户必选
-
 (yas-global-mode 1)
+
+(require 'lsp-bridge)
 (global-lsp-bridge-mode)
 ```
 
 ## 使用
-lsp-bridge开箱即用， 安装好文件对应的LSP服务器命令以后， 直接写代码即可， 不需要额外的设置。
+lsp-bridge开箱即用， **安装好文件对应的LSP服务器命令**以后， 直接写代码即可， 不需要额外的设置。
 
-需要注意的是 lsp-bridge 有两种模式： 
+需要注意的是 lsp-bridge 有两种模式：
 1. 检测到.git目录时(通过命令 `git rev-parse --is-inside-work-tree` 来判断)， lsp-bridge会扫描整个目录文件来提供补全
 2. 没有检测到.git目录时， lsp-bridge只会对打开的文件提供单文件补全
 
@@ -125,7 +124,8 @@ lsp-bridge每种语言的服务器配置存储在[lsp-bridge/langserver](https:/
 | 22 | [elm-language-server](https://github.com/elm-tooling/elm-language-server) | elm | |
 | 23 | [intelephense](https://github.com/bmewburn/vscode-intelephense) | php | |
 | 24 | [yaml-language-server](https://github.com/redhat-developer/yaml-language-server) | yaml | `npm install -g yaml-language-server` |
-
+| 25 | [zls](https://github.com/zigtools/zls) | zig | 运行 `zls config` 来生成 zls 的配置。参考 [Configuration Options](https://github.com/zigtools/zls#configuration-options) |
+| 26 | [groovy-language-server](https://github.com/GroovyLanguageServer/groovy-language-server) | groovy | 在 PATH 中创建一个名为 "groovy-language-server" 的脚本, 内容为 `$JAVA_HOME/bin/java -jar <path>/groovy-language-server-all.jar` |
 
 ### 需要完成的功能：
 
@@ -166,6 +166,17 @@ lsp-bridge的目标是实现Emacs生态中性能最快的LSP客户端, 但不是
 请先阅读[LSP协议规范](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/) 和 [lsp-bridge架构设计](https://manateelazycat.github.io/emacs/2022/05/12/lsp-bridge.html)。
 
 接着打开选项 ```lsp-bridge-enable-log``` ， happy hacking! ;)
+
+## 常见问题
+
+> 为什么 lsp-bridge 不能补全工程目录下其他文件的代码？
+
+lsp-bridge依靠git来查找工程目录的根路径， lsp-bridge找不到git信息就会进入单文件模式， 单文件模式下lsp-bridge只补全当前文件的内容, 你需要找到工程目录根路径， 执行 `git init` 命令来解决这个问题。
+
+> 打开 *.json 文件的时候， 为什么总是提示 `[LSP-Bridge] Error: can’t find command for *.json, disable lsp-bridge-mode.` 的错误?
+
+因为Emacs默认会把json文件的模式错误设置成js-mode, 你需要安装 [json-mode](https://github.com/joshwnj/json-mode) 来解决这个问题。
+
 
 ## 反馈问题
 

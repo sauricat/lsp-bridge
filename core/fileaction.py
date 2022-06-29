@@ -51,6 +51,7 @@ class FileAction:
         self.completion_items = {}
 
         self.try_completion_timer = None
+        self.completion_item_resolve_key = None
 
         self.diagnostics = []
 
@@ -60,7 +61,10 @@ class FileAction:
         for handler_cls in Handler.__subclasses__():
             self.handlers[handler_cls.name] = handler_cls(self)
 
-        (self.enable_auto_import) = get_emacs_vars(["acm-backend-lsp-enable-auto-import"])
+        (self.enable_auto_import, self.completion_items_limit) = get_emacs_vars([
+            "acm-backend-lsp-enable-auto-import",
+            "acm-backend-lsp-candidates-max-number"
+        ])
 
         self.lsp_server.attach(self)
 
@@ -126,15 +130,9 @@ class FileAction:
     def save_file(self):
         self.lsp_server.send_did_save_notification(self.filepath)
         
-    def code_fix(self):
+    def code_fix(self, range_start, range_end, action_kind):
         if self.lsp_server.code_action_provider and len(self.lsp_server.code_action_kinds) > 0:
-            eval_in_emacs("lsp-bridge-input-message", 
-                          self.filepath, 
-                          "Execute code action (default is all): ", 
-                          "code-action", 
-                          "list", 
-                          "", 
-                          self.lsp_server.code_action_kinds)
+            self.handlers["code_action"].send_request(range_start, range_end, self.diagnostics, action_kind)
         else:
             message_emacs("Current server not support code action.")
 
@@ -143,6 +141,8 @@ class FileAction:
 
     def completion_item_resolve(self, item_key):
         if item_key in self.completion_items:
+            self.completion_item_resolve_key = item_key
+            
             if self.lsp_server.completion_resolve_provider:
                 self.handlers["completion_item_resolve"].send_request(item_key, self.completion_items[item_key])
             else:
@@ -154,28 +154,18 @@ class FileAction:
                     item["additionalTextEdits"] if "additionalTextEdits" in item else "")
                     
     def completion_item_update(self, item_key, documentation, additional_text_edits):
-        if documentation != "" or additional_text_edits != "":
-            if type(documentation) == dict:
-                if "kind" in documentation:
-                    if documentation["kind"] == "markdown":
-                        documentation = documentation["value"]
-            eval_in_emacs("lsp-bridge-update-completion-item-info",
-                          {
-                              "filepath": self.filepath,
-                              "key": item_key,
-                              "additionalTextEdits": additional_text_edits,
-                              "documentation": documentation
-                          })
+        if self.completion_item_resolve_key == item_key:
+            if documentation != "" or additional_text_edits != "":
+                if type(documentation) == dict:
+                    if "kind" in documentation:
+                        if documentation["kind"] == "markdown":
+                            documentation = documentation["value"]
+                            
+                eval_in_emacs("lsp-bridge-update-completion-item-info",
+                              {
+                                  "filepath": self.filepath,
+                                  "key": item_key,
+                                  "additionalTextEdits": additional_text_edits,
+                                  "documentation": documentation
+                              })
 
-    def handle_input_response(self, range_start, range_end, callback_tag, callback_result):
-        ''' Handle input message for specified buffer.'''
-        if callback_tag == "code-action":
-            self.handlers["code_action"].send_request(range_start, range_end, self.diagnostics, self.lsp_server.code_action_kinds, callback_result)
-
-    def cancel_input_response(self, callback_tag):
-        ''' Cancel input message for specified buffer.'''
-        if callback_tag == "code-action":
-            message_emacs("Cancel code action.")
-        
-            
-            
